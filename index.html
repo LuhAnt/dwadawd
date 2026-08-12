@@ -33,6 +33,14 @@
     flex-direction: column;
     align-items: center;
     gap: 16px;
+    padding: 20px;
+    background: transparent;
+    box-shadow: none;
+    filter: none;
+    position: relative;
+    transition: padding 0.15s ease;
+  }
+  #wrap.guiOpen{
     padding: 34px 34px;
     background:
       radial-gradient(ellipse at 50% 0%, rgba(232,194,107,0.10) 0%, rgba(232,194,107,0) 55%),
@@ -41,7 +49,6 @@
       inset 0 0 0 2px var(--hexborder),
       inset 0 0 24px rgba(232,194,107,0.08);
     filter: drop-shadow(0 0 10px rgba(232,194,107,0.25)) drop-shadow(0 6px 18px rgba(0,0,0,0.6));
-    position: relative;
     clip-path: polygon(
       18% 0%, 82% 0%,
       82% 3%, 91% 3%,
@@ -55,7 +62,7 @@
       9% 3%, 18% 3%
     );
   }
-  #wrap::before, #wrap::after{
+  #wrap.guiOpen::before, #wrap.guiOpen::after{
     content:'';
     position:absolute;
     left:50%;
@@ -64,8 +71,8 @@
     transform: translateX(-50%) rotate(45deg);
     box-shadow: 0 0 6px rgba(232,194,107,0.7);
   }
-  #wrap::before{ top:-4px; }
-  #wrap::after{ bottom:-4px; }
+  #wrap.guiOpen::before{ top:-4px; }
+  #wrap.guiOpen::after{ bottom:-4px; }
 
   /* ---- combined total (read-only, auto-summed) ---- */
   #combinedRow{
@@ -198,7 +205,7 @@
   .skinSlot.missing .placeholder{ display:flex; }
 
   .pname{
-    font-size: 11px;
+    font-size: 18px;
     letter-spacing: 0.5px;
     color: var(--text);
     background: transparent;
@@ -207,7 +214,8 @@
     text-align:center;
     font-family: var(--game-font), monospace;
     border-bottom: 1px dashed transparent;
-    max-width: 100px;
+    max-width: 130px;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.8);
   }
   .pname:hover, .pname:focus{ border-bottom: 1px dashed #ffffff40; }
 
@@ -389,9 +397,13 @@
     Hold red dot top-right 1.5s = reset everything<br>
     Boss art: drop dragon.png / wither.png / warden.png / guardian.png next to this file<br>
     Player skins: drop player1.png / player2.png next to this file<br>
+    Fill in FIREBASE_CONFIG in the code to sync across devices live<br>
     (Enable "Interact" on this OBS source to click it)
   </div>
 </div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 
 <script>
 // look for a user-supplied minecraft.ttf next to this file.
@@ -409,12 +421,65 @@ if ('FontFace' in window) {
 
 const KEY = 'mc_death_counter_v4';
 const bossIds = ['dragon','wither','warden','guardian'];
-let state = JSON.parse(localStorage.getItem(KEY) || '{}');
-if(!('players' in state)) state.players = [{name:'PLAYER 1', count:0}, {name:'PLAYER 2', count:0}];
-if(!('beaten' in state)) state.beaten = {};
-bossIds.forEach(id => { if(!(id in state.beaten)) state.beaten[id] = false; });
 
-function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+// ---- fill these in with YOUR OWN Firebase project's values to turn on
+// live sync across devices/browsers (GitHub Pages <-> TikTok Studio, etc).
+// Get them from: Firebase Console -> Project Settings -> General -> "Your apps" -> Web app (</>) -> SDK config.
+// Leave any of these blank and the widget just runs local-only, like before.
+const FIREBASE_CONFIG = {
+  apiKey: "",
+  databaseURL: "",
+  projectId: ""
+};
+
+const defaultState = {
+  players: [{name:'PLAYER 1', count:0}, {name:'PLAYER 2', count:0}],
+  beaten: {}
+};
+bossIds.forEach(id => { defaultState.beaten[id] = false; });
+
+function normalizeState(s){
+  if(!s || typeof s !== 'object') s = {};
+  if(!Array.isArray(s.players) || s.players.length !== 2){
+    s.players = JSON.parse(JSON.stringify(defaultState.players));
+  }
+  if(!s.beaten || typeof s.beaten !== 'object') s.beaten = {};
+  bossIds.forEach(id => { if(!(id in s.beaten)) s.beaten[id] = false; });
+  return s;
+}
+
+let state = normalizeState(JSON.parse(localStorage.getItem(KEY) || '{}'));
+let fbRef = null;
+let fbReady = false;
+
+function save(){
+  // always keep a local backup, even in sync mode, in case Firebase is unreachable
+  localStorage.setItem(KEY, JSON.stringify(state));
+  if(fbReady && fbRef){
+    fbRef.set(state);
+  }
+}
+
+if(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.databaseURL && window.firebase){
+  try{
+    firebase.initializeApp(FIREBASE_CONFIG);
+    fbRef = firebase.database().ref('deathCounterState');
+    fbRef.on('value', (snapshot) => {
+      const remote = snapshot.val();
+      if(remote){
+        state = normalizeState(remote);
+      } else {
+        // nothing saved remotely yet — push current local state up as the seed
+        fbRef.set(state);
+      }
+      renderBosses();
+      renderPlayers();
+    });
+    fbReady = true;
+  } catch(e){
+    console.warn('Firebase sync unavailable, running in local-only mode.', e);
+  }
+}
 
 // ---- art loader (bosses + player skins) ----
 document.querySelectorAll('.icon, .skinSlot img').forEach(img => {
@@ -495,7 +560,9 @@ playerEls.forEach((el, i) => {
 
 function toggleHelp(){
   const h = document.getElementById('helpText');
-  h.style.display = (h.style.display === 'block') ? 'none' : 'block';
+  const open = h.style.display === 'block';
+  h.style.display = open ? 'none' : 'block';
+  document.getElementById('wrap').classList.toggle('guiOpen', !open);
 }
 
 const resetBtn = document.getElementById('resetBtn');
